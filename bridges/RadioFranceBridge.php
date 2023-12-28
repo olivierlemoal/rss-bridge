@@ -1,5 +1,6 @@
 <?php
 
+<<<<<<< HEAD
 /**
  * A bridge allowing fetching of Radio France radios transcripts.
  * I expect it to work at least for France Inter and France Culture.
@@ -205,3 +206,145 @@ class RadioFranceBridge extends BridgeAbstract
         return $returned;
     }
 }
+=======
+class RadioFranceBridge extends BridgeAbstract {
+	const NAME = 'Radio France Bridge';
+	const API_TOKEN = '9ab343ce-cae2-4bdb-90ca-526a3dede870';
+	const URI = 'https://www.radiofrance.fr';
+	const DESCRIPTION = 'Bridge to access all Radio France podcasts.';
+	const MAINTAINER = 'olivierlemoal';
+	const PARAMETERS = array(
+		'Show' => array(
+			'show_url' => array(
+				'name' => 'Radio Show URL',
+				'type' => 'text',
+				'required' => true,
+				'exampleValue' => 'https://www.franceculture.fr/emissions/les-pieds-sur-terre',
+				'title' => 'Insert radio show URL'
+			)
+		),
+	);
+
+	public function getIcon() {
+		$show_url = $this->getInput('show_url');
+		if(is_null($show_url)) {
+			return 'https://www.radiofrance.com/themes/custom/radiofrance/logo.svg';
+		}
+		$radio_id = $this->getRadioID();
+		$show_id = $this->getShowID($radio_id);
+		$show_api = 'https://api.radiofrance.fr/v1/shows/' . $show_id . '/diffusions?include=show';
+		$headers = array('X-Token: ' . self::API_TOKEN);
+		$html = getContents($show_api, $headers);
+		$shows = json_decode($html, true);
+		foreach($shows['included'] as $include) {
+			if(strcmp($include['type'], 'shows') == 0) {
+				foreach($include['attributes']['visuals'] as $visual) {
+					if(strcmp($visual['name'], 'square_banner') == 0) {
+						$visual_id = $visual['visual_uuid'];
+						$visual_url = 'https://api.radiofrance.fr/v1/services/embed/image/' . $visual_id . '?preset=568x568';
+						return $visual_url;
+					}
+				}
+			}
+		}
+	}
+
+	public function collectData() {
+		$radio_id = $this->getRadioID();
+		$show_id = $this->getShowID($radio_id);
+
+		$podcasts_api = 'https://api.radiofrance.fr/v1/shows/' . $show_id . '/diffusions';
+		$headers = array('X-Token: ' . self::API_TOKEN);
+		$html = getContents($podcasts_api, $headers);
+		$podcasts = json_decode($html, true);
+
+		foreach($podcasts['data'] as $podcast) {
+			$diffusion_id = $podcast['id'];
+			$this->addPodcast($diffusion_id);
+		}
+	}
+
+	private function addPodcast($diffusion_id) {
+		$diffusion_api = 'https://api.radiofrance.fr/v1/diffusions/' . $diffusion_id . '?include=manifestations&include=show';
+		$headers = array('X-Token: ' . self::API_TOKEN);
+		$html = getContents($diffusion_api, $headers);
+		$diffusion = json_decode($html, true);
+
+		$item = array();
+		$item['title'] = $diffusion['data']['attributes']['title'];
+		$item['content'] = $diffusion['data']['attributes']['standfirst'];
+		$item['uri'] = $diffusion['data']['attributes']['path'];
+		$item['author'] = 'Radio France';
+		$item['uid'] = $diffusion['data']['id'];
+		$item['timestamp'] = $diffusion['data']['attributes']['updatedTime'];
+		$enclosures = array();
+		foreach($diffusion['included'] as $include) {
+			if(strcmp($include['type'], 'manifestations') == 0) {
+				$duration = $include['attributes']['duration'];
+				$duration_str = sprintf('%02d:%02d:%02d', ($duration / 3600), ($duration / 60 % 60), $duration % 60);
+				$item['content'] = 'Durée: ' . $duration_str . ' - ' . $item['content'];
+				$mp3_url = $include['attributes']['url'];
+				$enclosures[] = $mp3_url;
+				break;
+			}
+		}
+		$item['enclosures'] = $enclosures;
+		if(isset($mp3_url)) {
+			$this->items[] = $item;
+		}
+	}
+
+	private function getRadioID() {
+		$requested_radio_host = parse_url($this->getInput('show_url'), PHP_URL_HOST);
+		$radio_id_api = 'https://api.radiofrance.fr/mapi/v1/brandsAndStations';
+		$html = getContents($radio_id_api);
+		$json_radio_id = json_decode($html, true);
+		foreach($json_radio_id['brands'] as $station) {
+			$radio_hostname = parse_url($station['websiteUrl'], PHP_URL_HOST);
+			if (strcmp($radio_hostname, $requested_radio_host) == 0) {
+				return $station['mainStationId'];
+			}
+		}
+	}
+
+	private function findShowData($shows, $requested_radio_show) {
+		foreach($shows as $show) {
+			if(!array_key_exists('path', $show['attributes'])) {
+				continue;
+			}
+			$show_path = parse_url($show['attributes']['path'], PHP_URL_PATH);
+			if(strcmp($requested_radio_show, $show_path) == 0) {
+				return $show['id'];
+			}
+		}
+	}
+
+	private function getShowID($radio_id) {
+		$requested_radio_show = parse_url($this->getInput('show_url'), PHP_URL_PATH);
+		$requested_radio_show = rtrim($requested_radio_show, '/');
+		$radio_shows_api = 'https://api.radiofrance.fr/v1/stations/' . $radio_id . '/shows?include=show';
+		$headers = array('X-Token: ' . self::API_TOKEN);
+		$html = getContents($radio_shows_api, $headers);
+		$json_shows = json_decode($html, true);
+		foreach($json_shows['included'] as $show) {
+			$show_path = parse_url($show['attributes']['path'], PHP_URL_PATH);
+			if(strcmp($requested_radio_show, $show_path) == 0) {
+				return $show['id'];
+			}
+		}
+		do {
+			$id = $this->findShowData($json_shows['data'], $requested_radio_show);
+			if(!is_null($id)) {
+				return $id;
+			}
+			if(!array_key_exists('next', $json_shows['links'])) {
+				break;
+			}
+			$next_link  = $json_shows['links']['next'];
+			$html = getContents('https://api.radiofrance.fr' . $next_link, $headers);
+			$json_shows = json_decode($html, true);
+		} while (!is_null($next_link));
+	}
+}
+?>
+>>>>>>> ca07ce50 ([RadioFranceBridge] First version)
